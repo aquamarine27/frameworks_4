@@ -1,0 +1,496 @@
+{
+  "info": {
+    "name": "Booking Service — Практическое задание №4",
+    "description": "Полный набор сценариев для проверки машины состояний, идемпотентности, компенсации и наблюдаемости",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "process_key", "value": "room-101-2025-06-01" },
+    { "key": "correlation_id", "value": "corr-001" }
+  ],
+  "item": [
+    {
+      "name": "🟢 Health — Liveness",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/healthz/live"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('liveness 200', () => pm.response.to.have.status(200));",
+              "pm.test('status alive', () => {",
+              "  const json = pm.response.json();",
+              "  pm.expect(json.status).to.eql('alive');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🟢 Health — Readiness (ready)",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/healthz/ready"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('readiness 200', () => pm.response.to.have.status(200));",
+              "pm.test('status ready', () => {",
+              "  pm.expect(pm.response.json().status).to.eql('ready');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔴 Health — Set critical degradation ON",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/admin/degrade",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"enabled\": true }" }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('degrade accepted 200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔴 Health — Readiness (not ready)",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/healthz/ready"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('readiness 503 when degraded', () => pm.response.to.have.status(503));",
+              "pm.test('status not ready', () => {",
+              "  pm.expect(pm.response.json().status).to.eql('not ready');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🟢 Health — Set critical degradation OFF",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/admin/degrade",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"enabled\": false }" }
+      }
+    },
+
+    {
+      "name": "━━━━━━ СЦЕНАРИЙ 1: Счастливый путь ━━━━━━",
+      "item": [
+        {
+          "name": "Шаг 1 — ПринятьЗаявку",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"{{process_key}}\",\n  \"idempotency_key\": \"evt-accept-001\",\n  \"correlation_id\": \"{{correlation_id}}\",\n  \"event\": \"ПринятьЗаявку\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('status ok', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.status).to.eql('ok');",
+                  "  pm.expect(j.prev_state).to.eql('Новый');",
+                  "  pm.expect(j.next_state).to.eql('ЗаявкаПринята');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Шаг 2 — Забронировать",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"{{process_key}}\",\n  \"idempotency_key\": \"evt-book-001\",\n  \"correlation_id\": \"{{correlation_id}}\",\n  \"event\": \"Забронировать\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('переход к РесурсЗабронирован', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.status).to.eql('ok');",
+                  "  pm.expect(j.next_state).to.eql('РесурсЗабронирован');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Шаг 3 — ВыдатьДоступ",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"{{process_key}}\",\n  \"idempotency_key\": \"evt-grant-001\",\n  \"correlation_id\": \"{{correlation_id}}\",\n  \"event\": \"ВыдатьДоступ\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('переход к ДоступВыдан', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.status).to.eql('ok');",
+                  "  pm.expect(j.next_state).to.eql('ДоступВыдан');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Шаг 4 — Завершить",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"{{process_key}}\",\n  \"idempotency_key\": \"evt-complete-001\",\n  \"correlation_id\": \"{{correlation_id}}\",\n  \"event\": \"Завершить\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('переход к Завершён', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.status).to.eql('ok');",
+                  "  pm.expect(j.next_state).to.eql('Завершён');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Проверка финального состояния",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/process/{{process_key}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('финальное состояние Завершён', () => {",
+                  "  pm.expect(pm.response.json().state).to.eql('Завершён');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "━━━━━━ СЦЕНАРИЙ 2: Идемпотентность (повтор) ━━━━━━",
+      "item": [
+        {
+          "name": "Создать процесс 2",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"room-102-repeat\",\n  \"idempotency_key\": \"evt-idem-accept-001\",\n  \"correlation_id\": \"corr-idem-001\",\n  \"event\": \"ПринятьЗаявку\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('первый раз — ok', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Повторный запрос с тем же idempotency_key",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"room-102-repeat\",\n  \"idempotency_key\": \"evt-idem-accept-001\",\n  \"correlation_id\": \"corr-idem-002\",\n  \"event\": \"ПринятьЗаявку\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('повтор — duplicate', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.status).to.eql('duplicate');",
+                  "});",
+                  "pm.test('состояние не изменилось — ЗаявкаПринята', () => {",
+                  "  pm.expect(pm.response.json().next_state).to.eql('ЗаявкаПринята');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "━━━━━━ СЦЕНАРИЙ 3: Компенсация (сбой ВыдатьДоступ) ━━━━━━",
+      "item": [
+        {
+          "name": "Шаг 1 — ПринятьЗаявку (процесс 3)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"room-103-fail\",\n  \"idempotency_key\": \"evt-fail-accept-001\",\n  \"correlation_id\": \"corr-fail-001\",\n  \"event\": \"ПринятьЗаявку\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Шаг 2 — Забронировать (процесс 3)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"room-103-fail\",\n  \"idempotency_key\": \"evt-fail-book-001\",\n  \"correlation_id\": \"corr-fail-001\",\n  \"event\": \"Забронировать\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Шаг 3 — ВыдатьДоступ с simulate_fail=true → компенсация",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"room-103-fail\",\n  \"idempotency_key\": \"evt-fail-grant-001\",\n  \"correlation_id\": \"corr-fail-001\",\n  \"event\": \"ВыдатьДоступ\",\n  \"simulate_fail\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('статус compensated', () => {",
+                  "  const j = pm.response.json();",
+                  "  pm.expect(j.status).to.eql('compensated');",
+                  "  pm.expect(j.next_state).to.eql('КомпенсацияВыполнена');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Проверка состояния после компенсации",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/process/room-103-fail"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('состояние КомпенсацияВыполнена', () => {",
+                  "  pm.expect(pm.response.json().state).to.eql('КомпенсацияВыполнена');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "━━━━━━ СЦЕНАРИЙ 4: Недопустимый переход ━━━━━━",
+      "item": [
+        {
+          "name": "Перейти сразу к Забронировать без ПринятьЗаявку",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"process_key\": \"room-104-invalid\",\n  \"idempotency_key\": \"evt-inv-book-001\",\n  \"correlation_id\": \"corr-inv-001\",\n  \"event\": \"Забронировать\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('422 недопустимый переход', () => pm.response.to.have.status(422));",
+                  "pm.test('статус error', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('error');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "━━━━━━ СЦЕНАРИЙ 5: Валидация — пустые поля ━━━━━━",
+      "item": [
+        {
+          "name": "Запрос без process_key",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/event",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idempotency_key\": \"evt-val-001\",\n  \"correlation_id\": \"corr-val-001\",\n  \"event\": \"ПринятьЗаявку\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 bad request', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "━━━━━━ Метрики и статус ━━━━━━",
+      "item": [
+        {
+          "name": "Получить метрики",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/metrics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('содержит счётчики', () => {",
+                  "  const body = pm.response.text();",
+                  "  pm.expect(body).to.include('successful_transitions');",
+                  "  pm.expect(body).to.include('redelivery_count');",
+                  "  pm.expect(body).to.include('compensation_count');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Список всех процессов",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/processes"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 ok', () => pm.response.to.have.status(200));",
+                  "pm.test('ответ — массив', () => {",
+                  "  pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Получить несуществующий процесс",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/process/nonexistent-process"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 not found', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
